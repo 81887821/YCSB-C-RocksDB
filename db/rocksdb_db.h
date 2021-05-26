@@ -18,7 +18,7 @@ namespace ycsbc {
 
 class RocksDB : public DB {
 public:
-  RocksDB(const char *dbPath,const std::string dbConfig);
+  RocksDB(const char *dbPath, const std::string dbConfig);
 
   int Read(const std::string &table, const std::string &key,
            const std::vector<std::string> *fields, std::vector<KVPair> &result);
@@ -41,6 +41,7 @@ public:
 
 private:
   rocksdb::DB *db_;
+  std::vector<rocksdb::ColumnFamilyHandle *> handles_;
   unsigned noResult;
   rocksdb::Iterator *it{nullptr};
 };

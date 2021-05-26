@@ -7,7 +7,9 @@
 #include "rocksdb/cache.h"
 #include "rocksdb/filter_policy.h"
 #include "rocksdb/flush_block_policy.h"
+#include "rocksdb/utilities/options_util.h"
 #include "utils/rocksdb_config.h"
+#include <cassert>
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -26,48 +28,53 @@ RocksDB::RocksDB(const char *dbPath, const string dbConfig) : noResult(0) {
   }
   int bloomBits = config.getBloomBits();
   size_t blockCache = config.getBlockCache();
-  bool seekCompaction = config.getSeekCompaction();
-  bool compression = config.getCompression();
-  bool directIO = config.getDirectIO();
-  size_t memtable = config.getMemtable();
-  // set optionssc
-  rocksdb::Options options;
-  rocksdb::BlockBasedTableOptions bbto;
-  options.db_paths = {
-      {"/mnt/sdb/testRocksdb/test1", (uint64_t)10 * 1024 * 1024 * 1024},
-      {"/mnt/sdb/testRocksdb/test2", (uint64_t)10 * 1024 * 1024 * 1024}};
-  options.create_if_missing = true;
-  options.write_buffer_size = memtable;
-  options.target_file_size_base = 64 << 20; // 64MB
-  // options.compaction_pri = rocksdb::kMinOverlappingRatio;
-  if (config.getTiered()) {
-    options.compaction_style = rocksdb::kCompactionStyleUniversal;
-  }
-  options.max_background_jobs = config.getNumThreads();
-  options.disable_auto_compactions = config.getNoCompaction();
-  // options.level_compaction_dynamic_level_bytes = true;
-  // options.target_file_size_base = 8<<20;
-  cerr << "write buffer size: " << options.write_buffer_size << endl;
-  cerr << "write buffer number: " << options.max_write_buffer_number << endl;
-  cerr << "num compaction trigger: "
-       << options.level0_file_num_compaction_trigger << endl;
-  cerr << "targe file size base: " << options.target_file_size_base << endl;
-  cerr << "level size base: " << options.max_bytes_for_level_base << endl;
-  if (!compression)
-    options.compression = rocksdb::kNoCompression;
-  if (bloomBits > 0) {
-    bbto.filter_policy.reset(rocksdb::NewBloomFilterPolicy(bloomBits));
-  }
-  bbto.block_cache = rocksdb::NewLRUCache(blockCache);
-  options.table_factory.reset(rocksdb::NewBlockBasedTableFactory(bbto));
+  auto cache = rocksdb::NewLRUCache(blockCache);
+  string optionsPath = config.getOptionsPath();
 
-  rocksdb::Status s = rocksdb::DB::Open(options, dbPath, &db_);
+  rocksdb::DBOptions loaded_db_opt;
+  std::vector<rocksdb::ColumnFamilyDescriptor> loaded_cf_descs;
+  rocksdb::ConfigOptions config_options;
+
+  rocksdb::Status s = LoadOptionsFromFile(
+      config_options, optionsPath, &loaded_db_opt, &loaded_cf_descs, &cache);
+  assert(s.ok());
+  if (bloomBits > 0) {
+    loaded_cf_descs[0]
+        .options.table_factory->GetOptions<rocksdb::BlockBasedTableOptions>()
+        ->filter_policy.reset(rocksdb::NewBloomFilterPolicy(bloomBits));
+  }
+
+  // loaded_db_opt.db_paths = {
+  //     {"/mnt/sdb/testRocksdb/test1", (uint64_t)10 * 1024 * 1024 * 1024},
+  //     {"/mnt/sdb/testRocksdb/test2", (uint64_t)10 * 1024 * 1024 * 1024},
+  //     {"/mnt/sdb/testRocksdb/test3", (uint64_t)10 * 1024 * 1024 * 1024}};
+
+  s = rocksdb::DB::Open(loaded_db_opt, dbPath, loaded_cf_descs, &handles_,
+                        &db_);
+
   if (!s.ok()) {
     cerr << "Can't open rocksdb " << dbPath << endl;
     exit(0);
   }
-  cout << "\nbloom bits:" << bloomBits << "bits\ndirectIO:" << (bool)directIO
-       << "\nseekCompaction:" << (bool)seekCompaction << endl;
+
+  cerr << "write buffer size: " << loaded_cf_descs[0].options.write_buffer_size
+       << endl;
+  cerr << "write buffer number: "
+       << loaded_cf_descs[0].options.max_write_buffer_number << endl;
+  cerr << "num compaction trigger: "
+       << loaded_cf_descs[0].options.level0_file_num_compaction_trigger << endl;
+  cerr << "targe file size base: "
+       << loaded_cf_descs[0].options.target_file_size_base << endl;
+  cerr << "level size base: "
+       << loaded_cf_descs[0].options.max_bytes_for_level_base << endl;
+
+  cerr << "bloom bits: " << bloomBits << endl;
+  cerr << "blockcache: "
+       << loaded_cf_descs[0]
+              .options.table_factory
+              ->GetOptions<rocksdb::BlockBasedTableOptions>()
+              ->block_cache->GetCapacity()
+       << endl;
 }
 
 int RocksDB::Read(const std::string &table, const std::string &key,
@@ -143,5 +150,10 @@ void RocksDB::printStats() {
   cout << stats << endl;
 }
 
-RocksDB::~RocksDB() { delete db_; }
+RocksDB::~RocksDB() {
+  for (auto *handle : handles_) {
+    delete handle;
+  }
+  delete db_;
+}
 } // namespace ycsbc
