@@ -13,6 +13,7 @@
 #include "rocksdb/filter_policy.h"
 #include <iostream>
 #include <string>
+#include <memory>
 
 namespace ycsbc {
 
@@ -43,6 +44,8 @@ private:
   rocksdb::DB *db_;
   unsigned noResult;
   rocksdb::Iterator *it{nullptr};
+  std::shared_ptr<rocksdb::FileSystem> fs_guard;
+  std::shared_ptr<rocksdb::Env> env_guard;
 };
 
 } // namespace ycsbc

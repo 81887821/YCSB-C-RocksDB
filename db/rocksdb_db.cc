@@ -8,6 +8,8 @@
 #include "rocksdb/filter_policy.h"
 #include "rocksdb/flush_block_policy.h"
 #include "utils/rocksdb_config.h"
+#include "rocksdb/file_system.h"
+#include "rocksdb/plugin/zenfs/fs/fs_zenfs.h"
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -17,6 +19,9 @@ using namespace std;
 
 namespace ycsbc {
 RocksDB::RocksDB(const char *dbPath, const string dbConfig) : noResult(0) {
+//  rocksdb::FileSystem *fsp;
+//  auto fs = rocksdb::NewZenFS(&fsp, "zenfs://dev:bius-block");
+  rocksdb::Status s;
   // get rocksdb config
   ConfigRocksDB config;
   if (dbConfig.empty()) {
@@ -33,9 +38,20 @@ RocksDB::RocksDB(const char *dbPath, const string dbConfig) : noResult(0) {
   // set optionssc
   rocksdb::Options options;
   rocksdb::BlockBasedTableOptions bbto;
-  options.db_paths = {
-      {"/mnt/sdb/testRocksdb/test1", (uint64_t)10 * 1024 * 1024 * 1024},
-      {"/mnt/sdb/testRocksdb/test2", (uint64_t)10 * 1024 * 1024 * 1024}};
+  s = rocksdb::FileSystem::Load("zenfs://dev:bius-block", &fs_guard);
+  if (!s.ok()) {
+      cerr << "Filesystem load failed: " << s.ToString() << endl;
+      exit(0);
+  }
+  env_guard = rocksdb::NewCompositeEnv(fs_guard);
+  rocksdb::Env *env = env_guard.get();
+  options.env = env;
+  options.use_direct_io_for_flush_and_compaction = true;
+
+  std::string zenfs_db_path;
+  env->GetTestDirectory(&zenfs_db_path);
+  zenfs_db_path += "/ycsb";
+
   options.create_if_missing = true;
   options.write_buffer_size = memtable;
   options.target_file_size_base = 64 << 20; // 64MB
@@ -61,7 +77,7 @@ RocksDB::RocksDB(const char *dbPath, const string dbConfig) : noResult(0) {
   bbto.block_cache = rocksdb::NewLRUCache(blockCache);
   options.table_factory.reset(rocksdb::NewBlockBasedTableFactory(bbto));
 
-  rocksdb::Status s = rocksdb::DB::Open(options, dbPath, &db_);
+  s = rocksdb::DB::Open(options, zenfs_db_path, &db_);
   if (!s.ok()) {
     cerr << "Can't open rocksdb " << dbPath << endl;
     exit(0);
